@@ -1,0 +1,18 @@
+# depslib dependency file v1.0
+1684314938 source:d:\codeblocks\brickbreaker2\main.cpp
+	<stdio.h>
+	<stdlib.h>
+	<graphics.h>
+	<unistd.h>
+	<iostream>
+
+1679237389 c:\winbgim\include\graphics.h
+	<windows.h>
+	<limits.h>
+	<sstream>
+
+1679237357 c:\winbgim\include\winbgim.h
+	<windows.h>
+	<limits.h>
+	<sstream>
+

@@ -1,0 +1,427 @@
+/*
+Copyright (C) 2015-2019 The University of Notre Dame
+This software is distributed under the GNU General Public License.
+See the file LICENSE for details.
+*/
+
+#include "console.h"
+#include "page.h"
+#include "process.h"
+#include "keyboard.h"
+#include "mouse.h"
+#include "interrupt.h"
+#include "clock.h"
+#include "ata.h"
+#include "device.h"
+#include "cdromfs.h"
+#include "string.h"
+#include "graphics.h"
+#include "kernel/ascii.h"
+#include "kernel/syscall.h"
+#include "rtc.h"
+#include "kernelcore.h"
+#include "kmalloc.h"
+#include "memorylayout.h"
+#include "kshell.h"
+#include "cdromfs.h"
+#include "diskfs.h"
+#include "serial.h"
+
+#define SIZE 9
+
+int board[SIZE-3][SIZE];
+
+int racketx = 460;
+int rackety = 700;
+
+int ballx = 510;
+int bally = 669;
+
+int directionX = 0;
+int directionY = 0;
+
+int score = 0;
+int life = 3;
+
+int ballspeed=5;
+int ballmovement=0;
+
+int gameOver = 0;
+int gameStart = 0;
+int moveRacket = 0;
+
+
+typedef struct bricks{
+	int x;
+	int y;
+};
+
+struct bricks bricksPosition[SIZE-3][SIZE];
+
+void delay() //topun hizi
+{
+  for(int i = 0; i < 160000;i++){ }
+}
+
+void gotoxy(struct graphics *g,int x,int y,char *str) // ekranda istenen noktaya str yazma
+{
+	x = x * 8;
+	y = y * 8;
+	
+	int value=0;
+	int bit = 8;
+	
+	while(strlen(str)>value)
+	{
+	  graphics_char(g,x+(bit*value),y,str[value]);
+	  value++;
+	}
+}
+
+void print_integer(struct graphics *g,int x,int y,int n) // ekranda istenen noktaya int yazma
+{ 
+
+    x = x * 8;
+    y = y * 8;
+  
+    char str[20];
+    *uint_to_string(n, str);
+    
+    int value=0;
+    int bit = 8;
+    
+    while(strlen(str)>value)
+	{
+	  graphics_char(g,x+(bit*value),y,str[value]);
+	  value++;
+	}
+    
+}
+
+void draw_racket(struct graphics *g) // raketi cizdir
+{
+    graphics_rect(g, racketx, rackety, 110, 5);
+}
+
+void clear_racket_right(struct graphics *g) // eski raketi sil (sol uc)
+{
+    gotoxy(g, racketx/8, rackety/8,"      ");
+    gotoxy(g, racketx/8, rackety/8 + 1,"      ");
+}
+
+void clear_racket_left(struct graphics *g) // eski raketi sil (sag uc)
+{
+    gotoxy(g, racketx/8 + 10 , rackety/8,"      ");
+    gotoxy(g, racketx/8 + 10 , rackety/8 + 1,"      ");
+}
+
+void clear_racket(struct graphics *g) // eski raketi sil (tum raket)
+{
+    gotoxy(g, racketx/8, rackety/8,"                ");
+    gotoxy(g, racketx/8, rackety/8 + 1,"                  ");
+}
+
+
+void draw_ball(struct graphics *g) // topu cizdir
+{
+    graphics_rect(g, ballx, bally, 15, 15);
+}
+
+void clear_ball(struct graphics *g) // eski topu sil
+{
+    gotoxy(g, ballx/8, bally/8,"   ");
+    gotoxy(g, ballx/8, bally/8+1,"   ");
+    gotoxy(g, ballx/8, bally/8+2,"   ");
+}
+
+void clear_brick(struct graphics *g, int x, int y) // carpilan tuglayi siler
+{
+    gotoxy(g, x/8, y/8,"             ");
+    gotoxy(g, x/8, y/8 + 1,"             ");
+    gotoxy(g, x/8, y/8 + 2,"             ");
+    gotoxy(g, x/8, y/8 + 3,"             ");
+}
+
+void update_score(struct graphics *g,int x,int y,int n) //skoru gunceller
+{
+        print_integer(g, x, y, n);
+}
+
+void update_life(struct graphics *g,int x,int y,int n) //cani gunceller
+{
+        print_integer(g, x, y, n);
+}
+
+
+void checkDirection() // yone bakarak yeni pozisyonu verir
+{	
+  if(ballmovement==0)
+  {
+    if (directionX ==  1) { ballx += 1;}
+    if (directionY ==  1) { bally += 1;}
+    if (directionX == -1) { ballx -= 1;}
+    if (directionY == -1) { bally -= 1;}  
+  }
+}
+
+void checkCollision(struct graphics *g)// tuglalara carpimi kontrol et
+{
+  for(int i = 0; i < SIZE - 3; i++)
+    {
+      for(int j = 0; j < SIZE; j++)
+      {
+        if(ballx >= bricksPosition[i][j].x && ballx - 15 <= bricksPosition[i][j].x + 90 && bally +15 >= bricksPosition[i][j].y && bally - 15 <= bricksPosition[i][j].y + 20)
+        {
+            if(board[i][j] == 0) // carpmissa arkaplan rengine boya
+            {
+                int x = bricksPosition[i][j].x;
+                int y = bricksPosition[i][j].y;
+                
+                clear_brick(g, x, y);
+
+                score += 100;
+                update_score(g, 10, 2,score);
+                board[i][j] = 1;
+                
+                directionY = -directionY;
+            }
+        }
+      }
+    }
+}
+
+void ball_control(struct graphics *g) //topun ekranin kenarlarina ve rakete carpimini kontrol et
+{
+  if(ballx >= 1000) { directionX = -directionX; ballx=1000; } // sag kenar
+  else if(ballx <= 0) { directionX = -directionX; ballx=0; } // sol kenar
+  else if(bally >= 670) // alt kenar
+  {
+    if(ballx >= racketx && ballx <= racketx + 110) // rakete carptiysa
+    {
+      directionY = -directionY;
+      draw_racket(g);
+      bally=670;
+    }
+    else
+    {
+      if(life <= 1) { gameOver = 1;}
+      else {
+        life--;
+        update_life(g, 124, 2, life);
+        clear_ball(g);
+        directionX = 0;
+        directionY = 0;
+        ballx = 510;
+        bally = 669;
+        clear_racket(g);
+        racketx = 460;
+        rackety = 700;
+        draw_racket(g);
+        moveRacket = 0;
+        gameStart = 0;
+        gotoxy(g, 54, 55,"press space to start");
+      }
+      
+    }
+  }
+  else if(bally < 40) { directionY = -directionY; bally=40; } // ust kenar
+}
+
+
+void move_ball(struct graphics *g)  //topun tum hareketleri kontrol
+{
+    ball_control(g);
+    clear_ball(g);
+    checkDirection();
+    checkCollision(g);
+    draw_ball(g);
+}
+
+void gameboard(struct graphics *g)  // oyun ekrani
+{
+    int i, j, x, y;
+    gotoxy(g, 3, 2,"Score:");
+    print_integer(g, 10, 2, score);
+    gotoxy(g, 54, 2,"BRICK BREAKER GAME");
+    gotoxy(g, 118, 2,"Life:");
+    print_integer(g, 124, 2, life);
+    x = 22;
+    y = 40;
+    
+    for(i = 0; i < SIZE - 3; i++) 
+    {
+      for(j = 0; j < SIZE; j++) 
+      {
+        if(board[i][j] == 0)
+        {
+          bricksPosition[i][j].x = x;
+          bricksPosition[i][j].y = y;
+          graphics_rect(g, x, y, 98, 30);
+        }
+        x +=110;
+      }
+      y += 40;
+      x = 22;
+    } 
+    
+    gotoxy(g, 54, 55,"press space to start");
+    
+    draw_racket(g);
+    draw_ball(g);
+}
+
+void game(struct graphics *g) // ana oyun loopu
+{
+  gameboard(g);
+  
+  int keycode;
+  
+  while(!gameOver)
+  {
+    keycode = keyboard_read(1);
+    
+    
+    if( keycode == 32 && gameStart == 0)
+    {
+            directionX = 1;
+            directionY = -1;
+            gotoxy(g, 54, 55,"                     ");
+            moveRacket = 1;
+            gameStart = 1;
+    }
+    
+    if( keycode == -119 && moveRacket)
+    {
+            if(racketx < 905)
+            {
+               clear_racket_right(g);
+	       racketx += 8;
+	       draw_racket(g);
+            }
+    }
+    if( keycode == -120 && moveRacket)    
+    {
+            if(racketx > 10)
+            {
+	      clear_racket_left(g);
+	      racketx -= 8;
+	      draw_racket(g);
+	    }
+    }
+    move_ball(g);
+    ballmovement++;
+    if(ballmovement >= ballspeed)
+    {
+      ballmovement=0;
+    }
+    if(score==5400) break;
+    delay();
+  }
+}
+
+
+void end_screen(struct graphics *g) // bitis ekrani
+{
+  graphics_clear(g, 0, 0, 1000, 800);
+  if(score==5400) { gotoxy(g, 70, 40, "YOU WIN!"); }
+  gotoxy(g, 54, 45, "Your score is:");
+  print_integer(g, 70, 45, score);
+  gotoxy(g, 50, 70, "To restart press ENTER");
+  gotoxy(g, 2, 85, "YAGMUR TAZE");
+  int keycode;
+  while (1)
+   {
+    keycode = keyboard_read(1);
+    if (keycode == 13)
+    {
+      for(int i = 0; i < SIZE - 3; i++)
+      {
+        for(int j = 0; j < SIZE; j++)
+        {
+          board[i][j] = 0;
+        }
+      }
+      score = 0;
+      life = 4;
+      gameOver = 0;
+      gameStart = 0;
+      moveRacket = 0;
+      graphics_clear(g, 0, 0, 1000, 800);
+      start_screen(g);
+      game(g);
+      end_screen(g);
+    }
+   }
+
+}
+
+void instruction_screen(struct graphics *g) // bitis ekrani
+{
+  graphics_clear(g, 0, 0, 1000, 800);
+  gotoxy(g, 40, 40, "The aim of the game is to break all the bricks by"); 
+  gotoxy(g, 40, 45, "hitting the ball on the paddle."); 
+  gotoxy(g, 40, 50, "Move the paddle by pressing the left and right arrow keys."); 
+  gotoxy(g, 40, 55, "If you drop the ball 3 times, the game is over."); 
+  gotoxy(g, 60, 70, "HAVE FUN!!!");
+  
+  gotoxy(g, 45, 85, "Press (<--)Backspace to return to the menu");
+  
+  int keycode;
+  while (1)
+   {
+    keycode = keyboard_read(1);
+    if (keycode == 8)
+    {
+      graphics_clear(g, 0, 0, 1000, 800);
+      break;
+    }
+   }
+}
+
+void start_screen(struct graphics *g) // baslangic ekrani
+{
+  graphics_clear(g, 0, 0, 1000, 800);
+  
+  int keycode;
+ while (1)
+ {
+  gotoxy(g, 54, 40, "Brick Breaker Game");
+  gotoxy(g, 54, 45, "PRESS ENTER TO START");
+  gotoxy(g, 90, 85, "Instructions(press 'i')");
+  gotoxy(g, 2, 85, "YAGMUR TAZE");
+  
+    keycode = keyboard_read(1);
+    if (keycode == 13)
+    {
+      break;
+    }
+    else if (keycode == 105 ||  keycode == 73)
+    {
+      instruction_screen(g);
+    }
+  }
+   graphics_clear(g, 0, 0, 1000, 800);
+}
+
+	
+int kernel_main()
+{
+	struct graphics *g = graphics_create_root();
+
+	console_init(g);
+	console_addref(&console_root);
+
+	page_init();
+	kmalloc_init((char *) KMALLOC_START, KMALLOC_LENGTH);
+	interrupt_init();
+	keyboard_init();
+	rtc_init();
+	process_init();
+	
+	
+	start_screen(g);
+	game(g);
+	end_screen(g);
+	
+	return 0;
+}
